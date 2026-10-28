@@ -778,6 +778,7 @@ class PI05Scheduler(Scheduler):
             paged_kv_indices=paged_kv_indices_full,
             paged_kv_last_page_len=paged_kv_last_full,
             position_ids=pos_ids_suffix,
+            max_kv_tokens=n_ps + chunk,
         )
 
         return _PI05Layout(

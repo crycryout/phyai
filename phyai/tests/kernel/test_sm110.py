@@ -144,6 +144,38 @@ def test_recommended_gemm_policy_limits_prefix712_reference_fallback(libraries):
             assert selector.select(query).kernel_id == expected, (rows, n, k)
 
 
-@pytest.mark.parametrize("filename", ["thor_bf16_gemm.yaml"])
+def test_expert_policy_preserves_prefix_and_other_geometries(libraries):
+    catalog = build_catalog()
+    policy = load_policy(POLICIES / "thor_bf16_expert.yaml", catalog)
+    selector = Selector(catalog, policy, device="nvidia:sm110")
+
+    def query(role="expert", **attrs):
+        return KernelQuery.build(
+            "attention_paged",
+            role=role,
+            model=ModelContext("pi05"),
+            dtype={"input": "bf16", "output": "bf16"},
+            shape={"tokens": 50, "heads": 8, "kv_heads": 1, "head_dim": 256},
+            attrs={
+                "causal": False,
+                "layout": "paged",
+                "runner": "pi05.expert",
+                "batch_size": 1,
+                **attrs,
+            },
+        )
+
+    assert (
+        selector.select(query()).kernel_id
+        == "phyai_kernel.attention_paged.sm110_expert"
+    )
+    assert selector.select(query("prefix")).kernel_id == "flashinfer.attention_paged"
+    assert (
+        selector.select(query(batch_size=2)).kernel_id == "flashinfer.attention_paged"
+    )
+    assert selector.select(query(causal=True)).kernel_id == "flashinfer.attention_paged"
+
+
+@pytest.mark.parametrize("filename", ["thor_bf16_gemm.yaml", "thor_bf16_expert.yaml"])
 def test_shipped_policies_parse(filename):
     load_policy(POLICIES / filename, build_catalog())

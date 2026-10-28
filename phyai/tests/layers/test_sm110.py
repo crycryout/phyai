@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from phyai.cache import KVCachePool
 from phyai.kernel.bootstrap import kernel_selector_scope
 from phyai.kernel.execution import current_execution, execution_phase
 from phyai.kernel.policy import load_policy
@@ -125,3 +126,80 @@ def test_packed_linear_weight_load_refreshes_existing_graph():
         layer.weight.data = layer.weight.data.clone()
         with pytest.raises(RuntimeError, match="Rebuild captured"):
             layer.post_load()
+
+
+@pytest.mark.parametrize("opt_in", (False, True))
+@pytest.mark.parametrize("strided_indices", (False, True))
+@torch.no_grad()
+def test_cache_write_and_gather_consumers_keep_unwritten_slots(opt_in, strided_indices):
+    with kernel_selector_scope(selector("thor_bf16_fusion.yaml" if opt_in else None)):
+        pool = KVCachePool(
+            num_layers=1,
+            num_slots=64,
+            num_kv_heads=1,
+            head_dim=256,
+            dtype=torch.bfloat16,
+            device="cuda",
+        )
+        k, v = (
+            torch.randn(50, 1, 256, device="cuda", dtype=torch.bfloat16)
+            for _ in range(2)
+        )
+        indices = torch.randperm(64, device="cuda")[:50]
+        if strided_indices:
+            indices = torch.stack(
+                (indices, torch.zeros_like(indices)), dim=1
+            ).flatten()[::2]
+            assert not indices.is_contiguous()
+        pool.write_kv(0, indices, k, v)
+        assert {c.kernel_id for c in pool._write_call.freeze().values()} == {
+            "phyai_kernel.kv_scatter.sm110"
+            if opt_in and not strided_indices
+            else "torch.kv_scatter"
+        }
+        actual_k, actual_v = pool.gather_kv(0, indices)
+        torch.testing.assert_close(actual_k, k, atol=0, rtol=0)
+        torch.testing.assert_close(actual_v, v, atol=0, rtol=0)
+        unused = torch.ones(64, device="cuda", dtype=torch.bool)
+        unused[indices] = False
+        assert not pool.k_buffer(0)[unused].count_nonzero()
+        assert not pool.v_buffer(0)[unused].count_nonzero()
+
+
+@pytest.mark.parametrize("opt_in", (False, True))
+@pytest.mark.parametrize("grad_k, grad_v", ((True, False), (False, True), (True, True)))
+@torch.enable_grad()
+def test_cache_write_preserves_gradients_and_history(opt_in, grad_k, grad_v):
+    with kernel_selector_scope(selector("thor_bf16_fusion.yaml" if opt_in else None)):
+        pool = KVCachePool(
+            num_layers=1,
+            num_slots=64,
+            num_kv_heads=1,
+            head_dim=256,
+            dtype=torch.bfloat16,
+            device="cuda",
+        )
+        k = torch.randn(
+            50, 1, 256, device="cuda", dtype=torch.bfloat16, requires_grad=grad_k
+        )
+        v = torch.randn(
+            50, 1, 256, device="cuda", dtype=torch.bfloat16, requires_grad=grad_v
+        )
+        indices = torch.arange(50, device="cuda")
+        pool.write_kv(0, indices, k, v)
+        # A later write must retain the existing cache's gradient history.
+        tail = torch.arange(50, 64, device="cuda")
+        plain = torch.zeros(14, 1, 256, device="cuda", dtype=torch.bfloat16)
+        pool.write_kv(0, tail, plain, plain)
+        assert {c.kernel_id for c in pool._write_call.freeze().values()} == {
+            "torch.kv_scatter"
+        }
+        actual_k, actual_v = pool.gather_kv(0, indices)
+        (actual_k.float().sum() + actual_v.float().sum()).backward()
+        for tensor, needs_grad in ((k, grad_k), (v, grad_v)):
+            if needs_grad:
+                torch.testing.assert_close(
+                    tensor.grad, torch.ones_like(tensor), atol=0, rtol=0
+                )
+            else:
+                assert tensor.grad is None

@@ -176,6 +176,14 @@ def test_expert_policy_preserves_prefix_and_other_geometries(libraries):
     assert selector.select(query(causal=True)).kernel_id == "flashinfer.attention_paged"
 
 
-@pytest.mark.parametrize("filename", ["thor_bf16_gemm.yaml", "thor_bf16_expert.yaml"])
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "thor_bf16_gemm.yaml",
+        "thor_bf16_expert.yaml",
+        "thor_bf16_fusion.yaml",
+        "thor_bf16.yaml",
+    ),
+)
 def test_shipped_policies_parse(filename):
     load_policy(POLICIES / filename, build_catalog())

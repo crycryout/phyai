@@ -48,6 +48,7 @@ class Cosmos3PolicyArgs(EntryArgs):
     conditioning_prefix: bool = False
     fuse_eager_attention: bool = False
     rounded_residual_norm: bool = False
+    thor_gemm: bool = False
 
 
 @Engine.register
@@ -81,21 +82,34 @@ class Cosmos3PolicyEntry(Entry):
                 "Cosmos3PolicyArgs.checkpoint_dir is required (no random-weight debug "
                 "path for a diffusion checkpoint this size)."
             )
+        from dataclasses import replace
+        from phyai.kernel.bootstrap import get_kernel_selector
+
         eng = get_engine_config()
+        selector = get_kernel_selector()
+        tags = set(selector.model.tags) - {"thor_gemm"}
         from phyai.models.cosmos3.parallel_cosmos3 import group_rank_size
 
         single_rank = all(group_rank_size(name)[1] == 1 for name in ("dense_tp", "cfg"))
         fast_paths = single_rank and not eng.runtime.use_cuda_graph
+        if args.thor_gemm and fast_paths:
+            tags.add("thor_gemm")
+        if not single_rank and args.thor_gemm:
+            logger.warning_once(
+                "Cosmos3 Thor fast paths require a single rank; using the configured backends."
+            )
         if eng.runtime.use_cuda_graph and any(
             (
                 args.conditioning_prefix,
                 args.fuse_eager_attention,
                 args.rounded_residual_norm,
+                args.thor_gemm,
             )
         ):
             logger.warning_once(
-                "Cosmos3 opt-in paths require Graph to be disabled; using the configured Graph path."
+                "Cosmos3 Thor fast paths require Graph to be disabled; using the configured Graph path."
             )
+        selector.model = replace(selector.model, tags=frozenset(tags))
         ckpt = Path(args.checkpoint_dir)
         device = eng.device.target
         dtype = eng.device.params_dtype

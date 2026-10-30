@@ -127,6 +127,10 @@ class Cosmos3T2VRunner(ModelRunner):
             contexts.reset()
         self._attention_contexts.clear()
         self._attention_fusion.reset()
+        # The helper is cheap when no opt-in route has ever packed a weight.
+        from phyai.kernel.impls.thor_gemm import invalidate_thor_gemm
+
+        invalidate_thor_gemm(self.transformer)
 
     def condition(
         self,

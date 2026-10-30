@@ -38,6 +38,7 @@ class Cosmos3PolicyScheduler(Scheduler):
         use_cuda_graph: bool = False,
         conditioning_prefix: bool = False,
         fuse_eager_attention: bool = False,
+        rounded_residual_norm: bool = False,
     ) -> None:
         self.transformer = transformer
         self.vae = vae
@@ -62,6 +63,7 @@ class Cosmos3PolicyScheduler(Scheduler):
             device=self.device,
             use_cuda_graph=use_cuda_graph,
             fuse_eager_attention=fuse_eager_attention and fast_paths,
+            rounded_residual_norm=rounded_residual_norm and fast_paths,
         )
         self.vae_runner = (
             Cosmos3VAERunner(vae, device=self.device, dtype=self.dtype)

@@ -47,6 +47,7 @@ class Cosmos3PolicyArgs(EntryArgs):
     weight_strict: bool = False
     conditioning_prefix: bool = False
     fuse_eager_attention: bool = False
+    rounded_residual_norm: bool = False
 
 
 @Engine.register
@@ -89,6 +90,7 @@ class Cosmos3PolicyEntry(Entry):
             (
                 args.conditioning_prefix,
                 args.fuse_eager_attention,
+                args.rounded_residual_norm,
             )
         ):
             logger.warning_once(
@@ -136,6 +138,7 @@ class Cosmos3PolicyEntry(Entry):
             use_cuda_graph=eng.runtime.use_cuda_graph,
             conditioning_prefix=args.conditioning_prefix and fast_paths,
             fuse_eager_attention=args.fuse_eager_attention and fast_paths,
+            rounded_residual_norm=args.rounded_residual_norm and fast_paths,
         )
         self.scheduler.setup()
         logger.info_rank0(

@@ -5,6 +5,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 from phyai.kernel.impls.thor_gemm import PackedWeightCache, ThorDenseGEMM
+from phyai.kernel.impls.thor_attention import CompactAttentionBackend, unsupported
 from phyai.kernel.registry import build_catalog
 from phyai.kernel.selector import Selector
 from phyai.kernel.types import KernelQuery
@@ -23,7 +24,7 @@ def selector(monkeypatch):
 def context(enabled):
     return {
         "family": "cosmos3_policy",
-        "tags": ["thor_gemm"] if enabled else [],
+        "tags": ["thor_gemm", "thor_compact_attention"] if enabled else [],
     }
 
 
@@ -38,6 +39,41 @@ def gemm_query(
         quant={"format": dtype},
         shape={"M": m, "N": n, "K": k},
         mode=mode,
+    )
+
+
+def attention_query(
+    arch="sm110",
+    heads=32,
+    kv_heads=8,
+    dim=128,
+    causal=False,
+    mask=None,
+    bias=False,
+    mode="eager",
+    enabled=True,
+):
+    return KernelQuery.build(
+        "attention",
+        device=f"nvidia:{arch}",
+        mode=mode,
+        model=context(enabled),
+        dtype={"input": "bf16", "key": "bf16", "value": "bf16"},
+        shape={
+            "tokens": 1472,
+            "kv_tokens": 1513,
+            "heads": heads,
+            "kv_heads": kv_heads,
+            "head_dim": dim,
+        },
+        attrs={
+            "layout": "padded",
+            "causal": causal,
+            "mask_kind": mask,
+            "has_attn_bias": bias,
+            "sliding_window": None,
+            "logits_soft_cap": None,
+        },
     )
 
 
@@ -73,6 +109,40 @@ def test_gemm_enabled_supported_geometry(selector, m, n, k):
 )
 def test_gemm_unsupported_uses_original_catalog(selector, kw):
     assert chosen(selector, gemm_query(**kw), "thor.gemm.bf16") != "thor.gemm.bf16"
+
+
+def test_default_selection_remains_original(selector):
+    assert selector.explain(gemm_query(enabled=False)).selected != "thor.gemm.bf16"
+    assert (
+        selector.explain(attention_query(enabled=False)).selected
+        != "thor.attention.compact"
+    )
+    assert (
+        chosen(selector, attention_query(), "thor.attention.compact")
+        == "thor.attention.compact"
+    )
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"arch": "sm90"},
+        {"arch": "sm100"},
+        {"heads": 16},
+        {"kv_heads": 4},
+        {"dim": 64},
+        {"causal": True},
+        {"mask": "keys"},
+        {"bias": True},
+        {"mode": "capture"},
+        {"enabled": False},
+    ],
+)
+def test_attention_unsupported_uses_original_catalog(selector, kw):
+    assert (
+        chosen(selector, attention_query(**kw), "thor.attention.compact")
+        != "thor.attention.compact"
+    )
 
 
 @pytest.mark.parametrize("transpose", [False, True])
@@ -151,5 +221,49 @@ def test_cpu_gemm_fallback_matches_real_flinear(bias):
     assert not route.plans and not route.workspaces
 
 
-def test_default_selection_remains_original(selector):
-    assert selector.explain(gemm_query(enabled=False)).selected != "thor.gemm.bf16"
+def test_attention_private_abi_requires_four_int32_vectors():
+    valid = [torch.empty(3, dtype=torch.int32) for _ in range(4)]
+    assert CompactAttentionBackend.plan_info(
+        SimpleNamespace(_plan_info=valid), torch.device("cpu")
+    ) == tuple(valid)
+    for invalid in [
+        valid[:3],
+        [torch.ones(1) for _ in range(4)],
+        [torch.ones(2, 2, dtype=torch.int32) for _ in range(4)],
+        None,
+    ]:
+        assert (
+            CompactAttentionBackend.plan_info(
+                SimpleNamespace(_plan_info=invalid), torch.device("cpu")
+            )
+            is None
+        )
+
+
+def test_compact_declines_cpu_before_launch():
+    q = torch.zeros(1, 3, 32, 128, dtype=torch.bfloat16)
+    kv = torch.zeros(1, 7, 8, 128, dtype=torch.bfloat16)
+    assert unsupported(None, q, kv, kv, None) == "device_or_dtype"
+
+
+def test_compact_declines_additive_bias_before_launch():
+    ctx = SimpleNamespace(attn_bias=torch.zeros(1))
+    assert unsupported(None, None, None, None, ctx) == "attention_bias"
+
+
+@pytest.mark.parametrize("scale", [None, 128**-0.5, 0.125])
+def test_compact_runtime_default_scale_guard(monkeypatch, scale):
+    from phyai.layers.attention.nocache import Attention
+    from phyai.layers.attention.enums import AttnLayout, AttnMode
+
+    layer = Attention(32, 128, num_kv_heads=8, causal=False, scale=scale)
+    q = torch.zeros(1, 3, 32, 128, dtype=torch.bfloat16)
+    kv = torch.zeros(1, 7, 8, 128, dtype=torch.bfloat16)
+    ctx = SimpleNamespace(
+        attn_bias=None, mask=None, mode=AttnMode.PREFILL, layout=AttnLayout.PADDED_4D
+    )
+    # CPU guard regression only; CUDA arithmetic is validated on Thor.
+    monkeypatch.setattr(torch.Tensor, "is_cuda", property(lambda _: True))
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
+    expected = "semantics" if scale == 0.125 else None
+    assert unsupported(layer, q, kv, kv, ctx) == expected

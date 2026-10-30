@@ -49,6 +49,7 @@ class Cosmos3PolicyArgs(EntryArgs):
     fuse_eager_attention: bool = False
     rounded_residual_norm: bool = False
     thor_gemm: bool = False
+    thor_compact_attention: bool = False
 
 
 @Engine.register
@@ -87,14 +88,16 @@ class Cosmos3PolicyEntry(Entry):
 
         eng = get_engine_config()
         selector = get_kernel_selector()
-        tags = set(selector.model.tags) - {"thor_gemm"}
+        tags = set(selector.model.tags) - {"thor_gemm", "thor_compact_attention"}
         from phyai.models.cosmos3.parallel_cosmos3 import group_rank_size
 
         single_rank = all(group_rank_size(name)[1] == 1 for name in ("dense_tp", "cfg"))
         fast_paths = single_rank and not eng.runtime.use_cuda_graph
         if args.thor_gemm and fast_paths:
             tags.add("thor_gemm")
-        if not single_rank and args.thor_gemm:
+        if args.thor_compact_attention and fast_paths:
+            tags.add("thor_compact_attention")
+        if not single_rank and (args.thor_gemm or args.thor_compact_attention):
             logger.warning_once(
                 "Cosmos3 Thor fast paths require a single rank; using the configured backends."
             )
@@ -104,6 +107,7 @@ class Cosmos3PolicyEntry(Entry):
                 args.fuse_eager_attention,
                 args.rounded_residual_norm,
                 args.thor_gemm,
+                args.thor_compact_attention,
             )
         ):
             logger.warning_once(

@@ -46,6 +46,7 @@ class Cosmos3PolicyArgs(EntryArgs):
     decode_video: bool = False
     weight_strict: bool = False
     conditioning_prefix: bool = False
+    fuse_eager_attention: bool = False
 
 
 @Engine.register
@@ -84,7 +85,12 @@ class Cosmos3PolicyEntry(Entry):
 
         single_rank = all(group_rank_size(name)[1] == 1 for name in ("dense_tp", "cfg"))
         fast_paths = single_rank and not eng.runtime.use_cuda_graph
-        if eng.runtime.use_cuda_graph and any((args.conditioning_prefix,)):
+        if eng.runtime.use_cuda_graph and any(
+            (
+                args.conditioning_prefix,
+                args.fuse_eager_attention,
+            )
+        ):
             logger.warning_once(
                 "Cosmos3 opt-in paths require Graph to be disabled; using the configured Graph path."
             )
@@ -129,6 +135,7 @@ class Cosmos3PolicyEntry(Entry):
             use_karras_sigmas=use_karras,
             use_cuda_graph=eng.runtime.use_cuda_graph,
             conditioning_prefix=args.conditioning_prefix and fast_paths,
+            fuse_eager_attention=args.fuse_eager_attention and fast_paths,
         )
         self.scheduler.setup()
         logger.info_rank0(

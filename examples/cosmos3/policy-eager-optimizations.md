@@ -26,6 +26,17 @@ preparation during eager inference. Compilation uses
 Supported Dynamo compilation errors fall back to eager preparation. Warm up the
 shapes used by the workload before measuring steady inference latency.
 
+## Rounded residual normalization
+
+Set `rounded_residual_norm=True` to allow the catalog's Thor BF16 residual
+add and RMSNorm implementation. It rounds the residual sum to BF16 before
+normalization and returns both outputs out of place. The implementation checks
+the selected plain norm, device, dtype, epsilon, layout and supported hidden
+dimension; incompatible selections retain the original operations.
+
+The kernel compiles from source at runtime with CuTe DSL. Install the
+workspace's CUDA and CuTe build dependencies and complete warmup before timing.
+
 ## Configuration example
 
 ```python
@@ -35,6 +46,7 @@ args = Cosmos3PolicyArgs(
     checkpoint_dir=checkpoint_dir,
     conditioning_prefix=True,
     fuse_eager_attention=True,
+    rounded_residual_norm=True,
 )
 ```
 

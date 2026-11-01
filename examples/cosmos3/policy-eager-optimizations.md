@@ -51,6 +51,19 @@ and releases associated plans. The extension is built from source with
 `torch.utils.cpp_extension.load`; a CUDA development toolkit and cuBLASLt are
 required. Allow first-use compilation and packing to finish before timing.
 
+## Thor compact attention
+
+Set `thor_compact_attention=True` to enable the SM110 BF16 unmasked Generator
+attention route for batch 1, 32 query heads, 8 KV heads and head dimension 128.
+Query and KV lengths can change between requests. Masks, additive bias,
+nondefault scale, unsupported layouts and other semantics retain the reference
+attention path.
+
+This route checks FlashInfer 0.6.17, CUDA 13.0 and the private plan ABI before
+dispatch. Other versions use the reference backend. It compiles from source with
+`tvm_ffi.cpp.load`. Plans are bounded and tracked per stream, and release waits
+for pending uses. Complete first-use JIT before timing.
+
 ## Configuration example
 
 ```python
@@ -62,6 +75,7 @@ args = Cosmos3PolicyArgs(
     fuse_eager_attention=True,
     rounded_residual_norm=True,
     thor_gemm=True,
+    thor_compact_attention=True,
 )
 ```
 

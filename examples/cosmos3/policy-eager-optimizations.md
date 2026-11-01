@@ -37,6 +37,20 @@ dimension; incompatible selections retain the original operations.
 The kernel compiles from source at runtime with CuTe DSL. Install the
 workspace's CUDA and CuTe build dependencies and complete warmup before timing.
 
+## Thor GEMM routes
+
+Set `thor_gemm=True` to enable the SM110 BF16 GEMM catalog routes for supported
+Cosmos3 Generator layers and shapes. Shapes outside the route manifest and
+unsupported runtime inputs use the existing fallback. Dynamic language lengths
+remain supported through dispatch or fallback; this flag does not require a
+fixed prompt length.
+
+Weight packs are created lazily and bounded by a 4608 MiB process-wide budget.
+Packs track weight identity and version. Runner reset invalidates its weights
+and releases associated plans. The extension is built from source with
+`torch.utils.cpp_extension.load`; a CUDA development toolkit and cuBLASLt are
+required. Allow first-use compilation and packing to finish before timing.
+
 ## Configuration example
 
 ```python
@@ -47,6 +61,7 @@ args = Cosmos3PolicyArgs(
     conditioning_prefix=True,
     fuse_eager_attention=True,
     rounded_residual_norm=True,
+    thor_gemm=True,
 )
 ```
 

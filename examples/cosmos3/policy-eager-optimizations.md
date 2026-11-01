@@ -18,6 +18,14 @@ the requested conditioning latent indices. Public VAE encoding still returns its
 full result. Unsupported VAE types, selections, modes and batches retain the
 original path.
 
+## Attention preparation
+
+Set `fuse_eager_attention=True` to use the runner's compiled RoPE and KV
+preparation during eager inference. Compilation uses
+`torch.compile(dynamic=True)` and preserves intermediate precision casts.
+Supported Dynamo compilation errors fall back to eager preparation. Warm up the
+shapes used by the workload before measuring steady inference latency.
+
 ## Configuration example
 
 ```python
@@ -26,6 +34,7 @@ from phyai.models.cosmos3.main_cosmos3_policy import Cosmos3PolicyArgs
 args = Cosmos3PolicyArgs(
     checkpoint_dir=checkpoint_dir,
     conditioning_prefix=True,
+    fuse_eager_attention=True,
 )
 ```
 
